@@ -974,9 +974,11 @@ function sfx(kind) {
       if (!_throttle('flame', 0.12)) return;
       noise(0.14, 0.03, 'lowpass', 1000, 600, 0.4, t); break;
     // —— 打击 / 反馈 ——
-    case 'hit':                                                 // 普通命中：闷击 + 高频脆响
+    case 'hit':                                                 // 普通命中：闷击 + 高频脆响（节流，避免弹幕多时音频节点爆炸）
+      if (!_throttle('hit', 0.045)) return;
       tone('triangle', 320*v, 150, 0.07, 0.05, t); noise(0.04, 0.02, 'highpass', 3200, 3200, 0, t); break;
-    case 'crit':                                                // 暴击：金属爆响 + 噪声裂帛
+    case 'crit':                                                // 暴击：金属爆响 + 噪声裂帛（节流，武器多时关键）
+      if (!_throttle('crit', 0.05)) return;
       tone('square', 1000*v, 320, 0.12, 0.07, t); tone('square', 1400*v, 520, 0.1, 0.04, t); noise(0.08, 0.04, 'bandpass', 2600, 1200, 1.5, t); break;
     case 'dash':  tone('sawtooth', 180, 560, 0.12, 0.05, t); noise(0.1, 0.025, 'highpass', 1800, 4000, 0.5, t); break;
     case 'hurt':  tone('sawtooth', 170, 55, 0.2, 0.13, t); noise(0.12, 0.05, 'lowpass', 700, 200, 0.5, t); break;
@@ -1623,7 +1625,7 @@ const DIFFS = [
   { id:'hard',      n:'困难', d:'Boss 更肉 · 小怪更多 · 攻势更猛', col:'#ffb13d', hp:1.8, atk:1.28, dmg:1.4, req:'normal',
     mob:{ max:6, interval:2.0, hp:38, col:'#ffb13d' } },
   // 噩梦：无法击败的博导 · 砸"博士论文" · 三次命中即死。需先通关「困难」才解锁。
-  { id:'nightmare', n:'噩梦', d:'三次命中即死 · 击败博导拯救弟弟 · 需通关困难解锁', col:'#ff5e7a', hp:1.0, atk:1.0, dmg:1.0, boss:'professor', req:'hard' },
+  { id:'nightmare', n:'噩梦', d:'三次命中即死 · 击败博士拯救弟弟 · 需通关困难解锁', col:'#ff5e7a', hp:1.0, atk:1.0, dmg:1.0, boss:'professor', req:'hard' },
 ];
 let difficulty = DIFFS[0];
 // 通关进度持久化（localStorage）：记录已通关的难度 id，用于解锁下一档
@@ -2078,7 +2080,7 @@ function showNightmareWin() {
   addStat('bossrush_wins', 1);
   addStat('bossrush_playtime', runTime);
   unlock('bossrush_bosses', 'professor');        // 图鉴：博导点亮
-  const txt = `你终于通过了最强试炼，<br>拯救了弟弟。<br>弟弟看到姐姐，开心地跑过来，<br>把一张卡票交到你的手里。<br>你打开卡片，上面写着——`;
+  const txt = `你终于通过了最强试炼，<br>拯救了弟弟。<br>弟弟看到姐姐，开心地跑过来，<br>把一张卡片交到你的手里。<br>你打开卡片，上面写着——`;
   showEnding(txt, { e:'🎟️', n:'Meshy 企业版 5 折优惠券' }, '');
 }
 // 黑屏叙事结局：白字 + 可选弟弟遗物卡通图，轻触回到标题
@@ -4165,9 +4167,14 @@ function update(dt) {
     if (player.bloodDash) { player.hp = Math.max(1, player.hp-8); player.hitFlash=0.2; }
   }
   dashRequest = false;
+  // 输入平滑：移动向量朝目标做轻插值（时间常数 ~50ms），消除微抖、转向与起停更丝滑，同时保持高响应
+  const ik = Math.min(1, dt * 20);
+  player.ivx = (player.ivx || 0) + (mx - (player.ivx || 0)) * ik;
+  player.ivy = (player.ivy || 0) + (my - (player.ivy || 0)) * ik;
+  let useX = player.ivx, useY = player.ivy;
   let spd = player.speed * player.moveMult;
-  if (player.dashTime > 0) { player.dashTime -= dt; spd = 880; }
-  player.x += mx*spd*dt; player.y += my*spd*dt;
+  if (player.dashTime > 0) { player.dashTime -= dt; spd = 880; useX = mx; useY = my; }  // 冲刺：用原始输入方向，爆发更干脆
+  player.x += useX*spd*dt; player.y += useY*spd*dt;
   player.x = Math.max(player.r, Math.min(W-player.r, player.x));
   player.y = Math.max(player.r, Math.min(H-player.r, player.y));
   if (player.iframe>0) player.iframe -= dt;
@@ -4216,7 +4223,8 @@ function update(dt) {
     firedSnd.add(w.kind === 'ux' ? (w.snd || 'detonate') : (FIRE_SFX[w.kind] || 'shot'));
     fired = true;
   }
-  if (fired) { player.gunKick = 1; firedSnd.forEach(k => sfx(k)); }
+  // 多武器时每帧最多播 4 种开火音效，避免同帧创建过多 Web Audio 节点导致掉帧
+  if (fired) { player.gunKick = 1; let _sn = 0; for (const k of firedSnd) { if (_sn++ >= 4) break; sfx(k); } }
 
   // boss move + phase + think
   bossMove(dt);
@@ -4356,6 +4364,7 @@ function update(dt) {
 
   for (const p of particles) { p.x+=p.vx*dt; p.y+=p.vy*dt; p.vx*=0.92; p.vy*=0.92; p.life-=dt; }
   particles = particles.filter(p => p.life>0);
+  if (particles.length > 360) particles = particles.slice(particles.length - 360);   // 粒子封顶：保留最新，避免武器多时更新/绘制开销失控
   for (const f of floaters) {
     if (f.vx !== undefined) { f.x += f.vx*dt; f.y += f.vy*dt; f.vy += 360*dt; f.vx *= 0.94; } // 四散小星：抛物线
     else { f.y -= 46*dt; }                                                                    // 普通飘字：上浮
@@ -4819,21 +4828,21 @@ function flameTongue(g, x, y, ang, len, wid, col) {
 }
 // 炎麒麟：程序化绘制的火焰麒麟（金身蓝鳞 + 烈焰鬃毛 + 犄角 + 灼目）
 // 主题化 boss 弹幕：武士→武士刀，法老→木乃伊，恶龙→火焰，鳄鱼→鱼（其余回退普通光弹）
+let _thesisW = 0;   // "博士论文"文字宽度缓存（字体固定 → 测一次即可，避免每发 measureText）
 function drawBossBullet(g, b, kind) {
   const R = b.r, t = time, seed = (b.x*0.13 + b.y*0.07);
   const ang = (b.vx||b.vy) ? Math.atan2(b.vy, b.vx) : Math.PI/2;
-  if (b.text) {                                  // 博导的"博士论文"：飘飞的论文纸 + 红字
+  if (b.text) {                                  // 博导的"博士论文"：飘飞的论文纸 + 红字（去 shadowBlur、缓存宽度，弹多时省开销）
     g.save(); g.translate(b.x, b.y); g.rotate(Math.sin(t*5 + seed)*0.16);
     g.font = '900 15px -apple-system,"PingFang SC",sans-serif';
-    g.textAlign='left'; g.textBaseline='middle';
-    const tw = g.measureText(b.text).width, pw = tw+12, ph = 24;
-    g.shadowColor='#ff2d2d'; g.shadowBlur=12;
+    g.textAlign='center'; g.textBaseline='middle';
+    if (!_thesisW) _thesisW = g.measureText(b.text).width;
+    const pw = _thesisW+12, ph = 24;
     g.fillStyle='#fff6e8'; roundRect(g, -pw/2, -ph/2, pw, ph, 5); g.fill();
-    g.shadowBlur=0;
     g.lineWidth=2; g.strokeStyle='#c0392b'; roundRect(g, -pw/2, -ph/2, pw, ph, 5); g.stroke();
     g.strokeStyle='#e8c8a8'; g.lineWidth=1;       // 纸上的横线
     g.beginPath(); g.moveTo(-pw/2+4,-3); g.lineTo(pw/2-4,-3); g.moveTo(-pw/2+4,4); g.lineTo(pw/2-4,4); g.stroke();
-    g.fillStyle='#c0392b'; g.textAlign='center'; g.fillText(b.text, 0, 1);
+    g.fillStyle='#c0392b'; g.fillText(b.text, 0, 1);
     g.restore(); return;
   }
   if (kind === 'hunter') {                       // 武士刀：随速度方向旋转的刀身
