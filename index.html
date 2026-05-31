@@ -1186,7 +1186,7 @@ function makeBoss(index) {
   if (difficulty.boss === 'professor') {
     const d = BOSS_KINDS.professor;
     return { kind:'professor', name:d.name, c0:d.c0, c1:d.c1, x:W/2, y:H*0.22, r:d.r, final:true, nightmare:true,
-      hp:500000, maxhp:500000, phase:1, atkCd:1.2, vx:60,
+      hp:500000, maxhp:500000, phase:1, atkCd:1.2, vx:60, skillHalf:false, skillLow:false,
       atkSpeed:1, atkState:null, charge:null, flash:0,
       windT:0, windMax:0, atkAnim:0, atkAnimMax:0.3, atkDir:null };
   }
@@ -2701,6 +2701,52 @@ function updateBossState(dt) {
       bossStrike(s.ang);
     }
     if (s.t <= 0) boss.atkState = null;
+  } else if (s.type === 'thesisStorm') {        // 技能①「DDL 风暴」：多臂旋转论文螺旋
+    s.t -= dt; s.acc += dt;
+    while (s.acc >= s.rate) {
+      s.acc -= s.rate; s.ang += 0.34;
+      for (let k=0;k<s.arms;k++) spawnThesis(boss.x, boss.y, s.ang + k*(Math.PI*2/s.arms), 170);
+      bossStrike(s.ang);
+    }
+    if (s.t <= 0) boss.atkState = null;
+  } else if (s.type === 'plagiarism') {         // 技能②「全员查重」：三面弹墙合围（带缝），分波压来
+    s.t -= dt; s.acc += dt;
+    if (s.acc >= s.rate) {
+      s.acc -= s.rate;
+      spawnEnclosingWalls();
+      addShake(8); sfx('shot');
+    }
+    if (s.t <= 0) boss.atkState = null;
+  }
+}
+// 噩梦博导技能调度：50% → DDL 风暴；20% → 全员查重。各带预警横幅 + 屏闪，确保可读可躲
+function profSkill(level) {
+  const name = level === 1 ? 'DDL 风暴' : '全员查重';
+  floaters.push({ x:boss.x, y:boss.y-boss.r-30, txt:'技能 · '+name, life:1.7, big:true, col:'#ff5e5e' });
+  sfx('phase'); addShake(26); hitstop = Math.max(hitstop, 0.06);
+  addFlash('#ff3030', 0.5);
+  addRing(boss.x, boss.y, 300, '#ff5e5e', 12, 0.7);
+  addRing(boss.x, boss.y, 220, '#ffd34e', 9, 0.85);
+  if (level === 1) {
+    // DDL 风暴：4 臂旋转论文螺旋，持续约 3 秒；期间压住普通攻击
+    boss.atkState = { type:'thesisStorm', t:3.0, ang:Math.random()*7, rate:0.045, acc:0, arms:4 };
+    boss.atkCd = 3.2;
+  } else {
+    // 全员查重：约每 0.95 秒一波三面合围弹墙，共约 3 波
+    boss.atkState = { type:'plagiarism', t:2.9, acc:0.9, rate:0.95 };
+    boss.atkCd = 3.1;
+  }
+}
+// 三面（上 + 左 + 右）论文弹墙合围，各留一道缝；底部留给玩家逃生
+function spawnEnclosingWalls() {
+  const sp = 100, gw = 78, col = '#ff7a7a';
+  const gapX = 70 + Math.random()*(W-140);     // 顶墙的缝
+  const gapY = H*0.34 + Math.random()*(H*0.34); // 侧墙的缝
+  for (let x=18; x<W-18; x+=34) if (Math.abs(x-gapX) > gw)
+    bullets.push({ x, y:H*0.12, vx:0, vy:sp, r:8, color:col });
+  for (let y=H*0.16; y<H*0.74; y+=34) if (Math.abs(y-gapY) > gw) {
+    bullets.push({ x:14,   y, vx:sp,  vy:0, r:8, color:col });
+    bullets.push({ x:W-14, y, vx:-sp, vy:0, r:8, color:col });
   }
 }
 
@@ -4183,6 +4229,11 @@ function update(dt) {
     addRing(boss.x, boss.y, 200, boss.c0, 14, 0.7);
     burst(boss.x, boss.y, 40, '#ffd34e', 460, 0.7);
     for (let i=0;i<40;i++) particles.push({x:boss.x,y:boss.y,vx:(Math.random()-.5)*400,vy:(Math.random()-.5)*400,life:.6,color:'#ffd34e'});
+  }
+  // 噩梦博导 Ethan 专属技能：血量 50% / 20% 各触发一次
+  if (boss.kind === 'professor') {
+    if (!boss.skillHalf && boss.hp <= boss.maxhp*0.5) { boss.skillHalf = true; profSkill(1); }
+    if (!boss.skillLow  && boss.hp <= boss.maxhp*0.2) { boss.skillLow  = true; profSkill(2); }
   }
   if (boss.flash>0) boss.flash -= dt;
   if (boss.atkAnim>0) boss.atkAnim -= dt;
