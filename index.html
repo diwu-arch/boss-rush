@@ -641,6 +641,8 @@ const PICKUPS = [
   {id:'p_multi', n:'弹道', amt:'+1',   icon:'弹', color:'#ffd34e', apply:p=>p.multishot+=1},
   {id:'p_size',  n:'弹体', amt:'+18%', icon:'巨', color:'#ff9e3d', apply:p=>p.sizeMult*=1.18},
 ];
+// 武器掉落（噩梦关专用）：拾取即随机追加一把未拥有武器，集齐后转为弹道 +1
+const WEAPON_PICKUP = { id:'p_weapon', n:'新武器', amt:'', icon:'🔫', color:'#7dffb0', weapon:true };
 
 // ---------- characters (角色: 定义基础属性 + 天赋，与武器正交) ----------
 const CHARACTERS = [
@@ -1180,11 +1182,11 @@ function freshPlayer() {
     hits:0 };   // hits: 噩梦关被"博士论文"命中的次数，满 3 即死
 }
 function makeBoss(index) {
-  // 噩梦关：博导本体——血量 1999（最强试炼，可击败），三次命中即死，击破即拯救弟弟
+  // 噩梦关：博导本体——血量 100000（最强试炼·耐力战），三次命中即死；整场持续掉武器+增益，边打边变强
   if (difficulty.boss === 'professor') {
     const d = BOSS_KINDS.professor;
     return { kind:'professor', name:d.name, c0:d.c0, c1:d.c1, x:W/2, y:H*0.22, r:d.r, final:true, nightmare:true,
-      hp:1999, maxhp:1999, phase:1, atkCd:1.2, vx:60,
+      hp:100000, maxhp:100000, phase:1, atkCd:1.2, vx:60,
       atkSpeed:1, atkState:null, charge:null, flash:0,
       windT:0, windMax:0, atkAnim:0, atkAnimMax:0.3, atkDir:null };
   }
@@ -2012,7 +2014,7 @@ function startBoss() {
   player.beams = null; player.spinAng = 0;
   minionCd = difficulty.mob ? 1.5 : 0;   // 开战 1.5s 后开始刷小怪
   pickupCd = 3; pickupCount = 0;
-  pickupsMax = 3 + bossIndex;   // 越往后掉落越多：4/5/6/7/8 张（后期吃更多增益）
+  pickupsMax = (difficulty.id === 'nightmare') ? Infinity : 3 + bossIndex;   // 战役：4/5/6/7/8 张；噩梦：整场不封顶，持续掉武器+增益
   shake = 0; hitstop = 0; flashA = 0; slowmo = 0;
   player.x = W/2; player.y = H*0.72;
   state = 'play'; time = 0;
@@ -2227,9 +2229,14 @@ function rollDropUpgrade() {
   return { id:'u_'+chosen.id, n:chosen.n, amt:'', ic:chosen.ic, icon:chosen.ic, color:RAR[chosen.r] || '#9fb3c8' , apply:chosen.apply };
 }
 function spawnPickup() {
-  // 35% 概率掉落 Boss 级增益卡，其余为基础小强化
-  let def = (Math.random() < 0.35) ? rollDropUpgrade() : null;
-  if (!def) def = PICKUPS[(Math.random()*PICKUPS.length)|0];
+  let def;
+  if (difficulty.id === 'nightmare' && Math.random() < 0.32) {
+    def = WEAPON_PICKUP;   // 噩梦关：32% 掉武器，让玩家边打边堆 DPS 攻克 10 万血
+  } else {
+    // 35% 概率掉落 Boss 级增益卡，其余为基础小强化
+    def = (Math.random() < 0.35) ? rollDropUpgrade() : null;
+    if (!def) def = PICKUPS[(Math.random()*PICKUPS.length)|0];
+  }
   const margin = 56;
   let x, y, tries = 0;
   do {
@@ -2241,8 +2248,14 @@ function spawnPickup() {
 }
 // 拾取卡片：即时强化 + 拾取特效
 function collectPickup(c) {
-  c.def.apply(player);
-  acquired.push(c.def);
+  let label = c.def.n + ' ' + (c.def.amt || '');
+  if (c.def.weapon) {                              // 武器掉落：随机给一把，由 renderBuffs 单独展示，不计入 acquired
+    const gw = addRandomWeapon(player);
+    label = gw ? ('获得武器 · ' + gw.n) : '弹道 +1';
+  } else {
+    c.def.apply(player);
+    acquired.push(c.def);
+  }
   sfx('crit');
   addRing(c.x, c.y, 70, c.def.color, 6, 0.45);
   addRing(c.x, c.y, 40, '#ffffff', 4, 0.32);
@@ -2257,7 +2270,7 @@ function collectPickup(c) {
       vx:Math.cos(a)*sp, vy:Math.sin(a)*sp-70, sz:12+Math.random()*6, rot:Math.random()*6,
       life:0.55+Math.random()*0.25, t:0 });
   }
-  floaters.push({ x:c.x, y:c.y-30, txt:c.def.n+' '+(c.def.amt||''), life:0.95, col:c.def.color });
+  floaters.push({ x:c.x, y:c.y-30, txt:label, life:0.95, col:c.def.color });
   renderBuffs();
 }
 
@@ -4300,10 +4313,10 @@ function update(dt) {
   }
   floaters = floaters.filter(f => f.life>0);
 
-  // 局内掉落卡：定时刷出，走过去即拾取
-  if (pickupCount < pickupsMax) {
+  // 局内掉落卡：定时刷出，走过去即拾取（噩梦关刷得更快、同屏最多 8 张避免堆积）
+  if (pickupCount < pickupsMax && pickups.length < 8) {
     pickupCd -= dt;
-    if (pickupCd <= 0) { spawnPickup(); pickupCount++; pickupCd = 4.5; }
+    if (pickupCd <= 0) { spawnPickup(); pickupCount++; pickupCd = (difficulty.id === 'nightmare') ? 3.2 : 4.5; }
   }
   for (const c of pickups) c.t += dt;
   pickups = pickups.filter(c => {
