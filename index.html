@@ -1182,11 +1182,11 @@ function freshPlayer() {
     hits:0 };   // hits: 噩梦关被"博士论文"命中的次数，满 3 即死
 }
 function makeBoss(index) {
-  // 噩梦关：博导本体——血量 100000（最强试炼·耐力战），三次命中即死；整场持续掉武器+增益，边打边变强
+  // 噩梦关：博导本体——血量 500000（最强试炼·耐力战），三次命中即死；整场持续掉武器+增益，边打边变强
   if (difficulty.boss === 'professor') {
     const d = BOSS_KINDS.professor;
     return { kind:'professor', name:d.name, c0:d.c0, c1:d.c1, x:W/2, y:H*0.22, r:d.r, final:true, nightmare:true,
-      hp:100000, maxhp:100000, phase:1, atkCd:1.2, vx:60,
+      hp:500000, maxhp:500000, phase:1, atkCd:1.2, vx:60,
       atkSpeed:1, atkState:null, charge:null, flash:0,
       windT:0, windMax:0, atkAnim:0, atkAnimMax:0.3, atkDir:null };
   }
