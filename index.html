@@ -690,23 +690,51 @@ for (const k in BOSS_WEAPON) {
     im.onerror = () => { rec.ready = false; };
     im.src = rig.img; weaponImg[k] = rec; }
 }
-const bossImg = {};
-for (const [kind, file] of Object.entries(BOSS_FILE)) {
-  const im = new Image(); const rec = { img: im, ready: false };
+// Boss 立绘 + 关卡背景：改为「按需 + 按序」加载。
+// 以前启动时把 28 张图一起并行下载，慢网下互相抢带宽 → 谁都下不完、打到该关时立绘/背景还没好。
+// 现在每关在「出场页」才加载该关的图，并对其余关按需/预取，第一关能独占带宽、最快就绪。
+const BG_FILE = { qilin:'bk1', hunter:'bk2', weaver:'bk3', comet:'bk4', monarch:'bk5' };
+const bossImg = {};   // kind -> { img, ready, box, failed, _started }
+const bgImg   = {};   // kind -> { img, ready, failed, _started }
+for (const kind of Object.keys(BOSS_FILE)) bossImg[kind] = { img: null, ready: false, box: null, failed: false, _started: false };
+for (const kind of Object.keys(BG_FILE))   bgImg[kind]   = { img: null, ready: false, failed: false, _started: false };
+function ensureBossImg(kind) {
+  const rec = bossImg[kind]; if (!rec || rec._started) return rec; rec._started = true;
+  const im = new Image();
   im.onload  = () => { rec.img = prepImage(im); rec.box = computeBBoxMain(rec.img); rec.ready = true; };
-  im.onerror = () => { rec.ready = false; };
-  im.src = 'assets/' + file + '.png';
-  bossImg[kind] = rec;
+  im.onerror = () => { rec.failed = true; };
+  im.src = 'assets/' + BOSS_FILE[kind] + '.png';
+  return rec;
 }
-
-// 关卡背景图（按 boss 种类映射；缺图则保持原暗色背景）
-const bgImg = {};
-for (const [kind, file] of [['qilin','bk1'], ['hunter','bk2'], ['weaver','bk3'], ['comet','bk4'], ['monarch','bk5']]) {
-  const im = new Image(); const rec = { img: im, ready: false };
-  im.onload  = () => { rec.ready = true; };
-  im.onerror = () => { rec.ready = false; };
-  im.src = 'assets/' + file + '.png';
-  bgImg[kind] = rec;
+function ensureBgImg(kind) {
+  const rec = bgImg[kind]; if (!rec || rec._started) return rec; if (rec) rec._started = true;
+  const im = new Image();
+  im.onload  = () => { rec.img = im; rec.ready = true; };
+  im.onerror = () => { rec.failed = true; };
+  im.src = 'assets/' + BG_FILE[kind] + '.png';
+  return rec;
+}
+// 某关 boss 的 kind（与 showBossIntro 内同一映射）
+function bossKindForIndex(idx) {
+  return (typeof difficulty !== 'undefined' && difficulty && difficulty.boss) || BOSS_SEQ[Math.min(idx, BOSS_SEQ.length) - 1];
+}
+// 启动某关三张图的加载（立绘 + 背景 + 出场全屏图）；用于出场页就绪门 & 预取下一关
+const _introWarmed = {};
+function ensureBossAssets(idx) {
+  const kind = bossKindForIndex(idx);
+  ensureBossImg(kind); ensureBgImg(kind);
+  // 预取出场全屏图（showBossIntro 的 <img> 命中缓存即可秒显）
+  const def = (typeof BOSS_KINDS !== 'undefined' && BOSS_KINDS[kind]) || {};
+  const f = 'assets/boss' + (def.img || idx) + '.png';
+  if (!_introWarmed[f]) { _introWarmed[f] = true; const im = new Image(); im.src = f; }
+}
+// 该关立绘 + 背景是否都已就绪（或确认缺失 → 可降级开打，不卡死）
+function bossAssetsReady(idx) {
+  const kind = bossKindForIndex(idx);
+  const b = bossImg[kind], g = bgImg[kind];
+  const bOk = !b || b.ready || b.failed;
+  const gOk = !g || g.ready || g.failed;
+  return bOk && gOk;
 }
 
 // 小怪贴图：assets/xiaoguai.png（缺图则回退到程序化卡通史莱姆）
@@ -1844,7 +1872,7 @@ function showDifficultySelect() {
       badge = `<div class="soon" style="color:#7ee0a6;border-color:#7ee0a655">✓ 已通关</div>`;
     }
     el.innerHTML = `<div class="nm" style="color:${m.col}">${m.n}</div><div class="ds">${m.d}</div>` + badge;
-    if (unlocked) el.onclick = () => { initAudio(); difficulty = m; applyDifficultyToPlayer(); applyMeta(player); document.getElementById('difficulty').style.display = 'none'; showWeaponSelect(); };
+    if (unlocked) el.onclick = () => { initAudio(); difficulty = m; applyDifficultyToPlayer(); applyMeta(player); ensureBossAssets(1); document.getElementById('difficulty').style.display = 'none'; showWeaponSelect(); };   // 选完难度即开始预取第 1 关 boss 图（趁选武器时下好）
     wrap.appendChild(el);
   });
   document.getElementById('difficulty').style.display = 'flex';
@@ -1943,25 +1971,43 @@ function showBossIntro(idx, onDone) {
   state = 'bossintro';
   setHud(false);
   ['overlay','upgrade','weapon','character','difficulty'].forEach(id => { const e = document.getElementById(id); if (e) e.style.display = 'none'; });
-  let done = false;
+  let done = false, wantStart = false, introImgReady = false, readyTick = null;
+  // 本关三张图都就绪（立绘 + 背景 + 出场图，或确认缺失）才允许开打，杜绝"立绘/背景没出来就进战斗"
+  const allReady = () => bossAssetsReady(idx) && introImgReady;
   const finish = () => {
     if (done) return; done = true;
-    overlay.removeEventListener('click', finish);
+    if (readyTick) { clearInterval(readyTick); readyTick = null; }
+    overlay.removeEventListener('click', tryStart);
     overlay.classList.add('fade');
     setTimeout(() => { overlay.style.display = 'none'; overlay.classList.remove('fade'); onDone(); }, 460);
   };
-  img.onerror = () => { overlay.style.display = 'none'; if (!done) { done = true; onDone(); } };
-  img.onload  = () => { sfx('boss'); addShake(28); addFlash('#ffffff', 0.4); };
+  // 点击开战：就绪则进；未就绪则记录意图 + 显示"加载中"，就绪后自动进
+  const tryStart = () => { if (done) return; if (allReady()) finish(); else { wantStart = true; tap.textContent = '素材加载中…'; } };
+  // 启动本关立绘 + 背景加载（按需，独占带宽 → 最快就绪）
+  ensureBossImg(kind); ensureBgImg(kind);
+  // 出场全屏图（缺失也不再直接跳过，标记就绪后仍等立绘/背景，避免开战缺图）
+  img.onerror = () => { introImgReady = true; };
+  img.onload  = () => { introImgReady = true; sfx('boss'); addShake(28); addFlash('#ffffff', 0.4); };
   img.src = 'assets/boss' + (def.img || idx) + '.png';   // 出场图跟随 Boss 身份，调换关位后仍正确
+  // 就绪轮询：更新提示；玩家若已点过开战，则就绪即自动进入战斗
+  tap.textContent = allReady() ? '点击开战 ▶' : '素材加载中…';
+  readyTick = setInterval(() => {
+    if (allReady()) {
+      tap.textContent = '点击开战 ▶';
+      clearInterval(readyTick); readyTick = null;
+      if (wantStart) finish();
+    }
+  }, 150);
   // 重启 CSS 入场动画（同一覆盖层复用于 5 个 Boss）
   [img, info, tap].forEach(e => { e.style.animation = 'none'; });
   overlay.style.display = 'flex';
   void overlay.offsetWidth;
   [img, info, tap].forEach(e => { e.style.animation = ''; });
-  overlay.addEventListener('click', finish);
+  overlay.addEventListener('click', tryStart);
 }
 function startBoss() {
   boss = makeBoss(bossIndex);
+  if (bossIndex + 1 <= TOTAL_BOSSES) ensureBossAssets(bossIndex + 1);   // 开打即后台预取下一关 boss 图，过关时已就绪
   bullets = []; shots = []; telegraphs = []; particles = []; floaters = []; rings = []; sparks = []; pickups = []; slashes = []; flames = []; fx = []; enemySlow = 0; minions = [];
   player.beams = null; player.spinAng = 0;
   minionCd = difficulty.mob ? 1.5 : 0;   // 开战 1.5s 后开始刷小怪
@@ -5388,19 +5434,11 @@ function preloadAssets(list, onProgress) {
     report();
   });
 }
-// 标题就绪后，后台静默预热其余关卡素材（Boss 立绘/角色/武器/结算曲），玩到后面不卡顿。
+// 标题就绪后只后台预热「结算曲」。
+// Boss 立绘/背景/出场图改由 ensureBossAssets 按关「优先 + 预取」加载（见上），不再在此一次性并行抢带宽；
+// 角色与武器贴图在脚本解析时已各自开始加载，无需在此重复 fetch。
 function warmBackgroundAssets() {
-  const more = [
-    'assets/bgm_result.mp3',   // 结算/通关曲：开场视频期间后台预读，通关时已就绪
-    'assets/boss1.png',        // 首关 Boss 立绘：标题→开场→难度选择期间后台预读
-    'assets/boss2.png','assets/boss3.png','assets/boss4.png','assets/boss5.png','assets/boss6.png','assets/bosse.png',
-    'assets/bk1.png','assets/bk2.png','assets/bk3.png','assets/bk4.png','assets/bk5.png',
-    'assets/zhujue.png','assets/ranger.png','assets/qilin.png','assets/wushi.png','assets/meidaowushi.png',
-    'assets/dao.png','assets/falaowuqi.png','assets/eyuwuqi.png','assets/longwuqi.png',
-    'assets/falao.png','assets/eyu.png','assets/elong.png','assets/falaodandu.png','assets/eyudandu.png','assets/longdandu.png',
-    'assets/xiaoguai.png'
-  ];
-  more.forEach(u => { try { fetch(u, { cache: 'force-cache' }).then(r => r.blob()).catch(() => {}); } catch (e) {} });
+  try { fetch('assets/bgm_result.mp3', { cache: 'force-cache' }).then(r => r.blob()).catch(() => {}); } catch (e) {}
 }
 function startTitle() {
   reset();                 // reset() 内已显示封面（showCharacterSelect），此时素材已在缓存→秒出
