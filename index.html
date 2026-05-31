@@ -1180,11 +1180,11 @@ function freshPlayer() {
     hits:0 };   // hits: 噩梦关被"博士论文"命中的次数，满 3 即死
 }
 function makeBoss(index) {
-  // 噩梦关：博导本体——血量 999999（实际无法击败），三次命中即死，唯一结局是被它打倒
+  // 噩梦关：博导本体——血量 1999（最强试炼，可击败），三次命中即死，击破即拯救弟弟
   if (difficulty.boss === 'professor') {
     const d = BOSS_KINDS.professor;
     return { kind:'professor', name:d.name, c0:d.c0, c1:d.c1, x:W/2, y:H*0.22, r:d.r, final:true, nightmare:true,
-      hp:999999, maxhp:999999, phase:1, atkCd:1.2, vx:60,
+      hp:1999, maxhp:1999, phase:1, atkCd:1.2, vx:60,
       atkSpeed:1, atkState:null, charge:null, flash:0,
       windT:0, windMax:0, atkAnim:0, atkAnimMax:0.3, atkDir:null };
   }
@@ -1621,7 +1621,7 @@ const DIFFS = [
   { id:'hard',      n:'困难', d:'Boss 更肉 · 小怪更多 · 攻势更猛', col:'#ffb13d', hp:1.8, atk:1.28, dmg:1.4, req:'normal',
     mob:{ max:6, interval:2.0, hp:38, col:'#ffb13d' } },
   // 噩梦：无法击败的博导 · 砸"博士论文" · 三次命中即死。需先通关「困难」才解锁。
-  { id:'nightmare', n:'噩梦', d:'三次命中即死 · 无法击败的博导 · 需通关困难解锁', col:'#ff5e7a', hp:1.0, atk:1.0, dmg:1.0, boss:'professor', req:'hard' },
+  { id:'nightmare', n:'噩梦', d:'三次命中即死 · 击败博导拯救弟弟 · 需通关困难解锁', col:'#ff5e7a', hp:1.0, atk:1.0, dmg:1.0, boss:'professor', req:'hard' },
 ];
 let difficulty = DIFFS[0];
 // 通关进度持久化（localStorage）：记录已通关的难度 id，用于解锁下一档
@@ -2057,15 +2057,27 @@ function bossDeath() {
   burst(boss.x, boss.y, 50, boss.c0,   520, 0.95);
   for (let i=0;i<80;i++) particles.push({x:boss.x,y:boss.y,vx:(Math.random()-.5)*640,vy:(Math.random()-.5)*640,life:.85,color:Math.random()<.5?boss.c0:'#fff'});
   floaters.push({ x:boss.x, y:boss.y-10, txt: boss.final ? '通关！' : '击破！', life:1.2, big:true });
+  const nightmareWin = (difficulty.id === 'nightmare');   // 噩梦关击破博导 → 专属圆满结局
   const won = bossIndex >= TOTAL_BOSSES;
-  if (!won) {
+  if (!won && !nightmareWin) {
     const grant = (bossIndex === 4) ? 2 : 1;   // 第 4 关额外奖励：一次给两把武器
     for (let i = 0; i < grant; i++) {
       const gw = addRandomWeapon(player);
       if (gw) floaters.push({ x:player.x, y:player.y-30-i*26, txt:'获得武器 · '+gw.n, life:1.6, col:'#7dffb0' });
     }
   }
-  setTimeout(() => { if (state==='dying') { won ? showVictory() : showUpgrades(); } }, 820);
+  setTimeout(() => { if (state==='dying') { nightmareWin ? showNightmareWin() : (won ? showVictory() : showUpgrades()); } }, 820);
+}
+// 噩梦关圆满结局：击败最强试炼·拯救弟弟，弟弟递上一张卡票
+function showNightmareWin() {
+  state = 'win';
+  addFlash('#ffffff', 0.5);
+  markCleared(difficulty.id);                    // 记录噩梦通关 → 难度卡显示「✓ 已通关」
+  addStat('bossrush_wins', 1);
+  addStat('bossrush_playtime', runTime);
+  unlock('bossrush_bosses', 'professor');        // 图鉴：博导点亮
+  const txt = `你终于通过了最强试炼，<br>拯救了弟弟。<br>弟弟看到姐姐，开心地跑过来，<br>把一张卡票交到你的手里。<br>你打开卡片，上面写着——`;
+  showEnding(txt, { e:'🎟️', n:'Meshy 企业版 5 折优惠券' }, '');
 }
 // 黑屏叙事结局：白字 + 可选弟弟遗物卡通图，轻触回到标题
 function showEnding(textHtml, item, unlockText) {
